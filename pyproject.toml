@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echo"
+version = "0.1.0"
+description = "MCP server exposing personal data from the HPI stack to LLM assistants."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "shchesnyak-d" }]
+keywords = ["mcp", "hpi", "quantified-self", "personal-data", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
+
+# hpi-modules is deliberately NOT listed here: it lives in a sibling repo,
+# is not published to PyPI, and must be installed alongside Echo (see README).
+# Listing it would break `pipx install` because the resolver can't find it.
+dependencies = [
+    "fastmcp>=0.3",
+    "HPI>=0.4",
+]
+
+[project.optional-dependencies]
+cache = ["cachew>=0.15"]
+tests = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "freezegun>=1.5",
+]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-setuptools",
+]
+
+[project.scripts]
+echo-mcp = "echo.server:main"
+
+[project.urls]
+Homepage = "https://github.com/shchesnyak-d/echo"
+Issues = "https://github.com/shchesnyak-d/echo/issues"
+
+[tool.setuptools]
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["echo*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_unimported = false
+mypy_path = "src"
+files = ["src/echo"]
+
+[[tool.mypy.overrides]]
+module = ["my.*", "fastmcp.*", "cachew.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",
+    "I",
+    "B",
+    "UP",
+    "SIM",
+    "RUF",
+    "PL",
+    "PIE",
+    "PT",
+    "RET",
+    "TID",
+]
+ignore = [
+    "E501",
+    "PLR2004",
+    "PLR0913",
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "PLC0415",
+    "TID252",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004", "S101", "PT018"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["echo"]
