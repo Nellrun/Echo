@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from tests.conftest import FakeDiary, FakeRating, film
-
 from echo.providers.films import taste
+from tests.conftest import FakeDiary, FakeRating, film
 
 
 def r(name: str, year: int | None, rating: float) -> FakeRating:

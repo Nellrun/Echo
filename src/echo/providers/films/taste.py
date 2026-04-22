@@ -85,7 +85,7 @@ def build(
         "total_rated_films": len(ratings),
         "avg_rating": average(r.rating for r in ratings) if ratings else None,
         "rating_distribution": rating_distribution(
-            (r.rating for r in ratings)
+            r.rating for r in ratings
         ),
         "favourite_decades": favourite_decades[:5],
         "most_rewatched": most_rewatched,

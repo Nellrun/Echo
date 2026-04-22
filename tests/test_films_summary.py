@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from tests.conftest import FakeDiary, film
-
 from echo.core.periods import parse_period
 from echo.providers.films import summary
+from tests.conftest import FakeDiary, film
 
 
 def d(year: int, month: int, day: int) -> date:

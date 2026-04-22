@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import sys
-import types
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
-from tests.conftest import FakeDiary, FakeRating, FakeWatchlistItem, film
-
 from echo.core.registry import Registry
 from echo.core.types import Event, Period
+from tests.conftest import FakeRating, FakeWatchlistItem, film
 
 
 class MockMCP:
@@ -19,7 +16,7 @@ class MockMCP:
     def __init__(self) -> None:
         self.tools: dict[str, callable] = {}
 
-    def tool(self, *args, **kwargs):  # noqa: ARG002
+    def tool(self, *args, **kwargs):
         def decorator(fn):
             self.tools[fn.__name__] = fn
             return fn
@@ -54,7 +51,7 @@ class StubFilmsProvider:
     def watchlist(self) -> list[FakeWatchlistItem]:
         return list(self._watchlist)
 
-    def register_tools(self, mcp) -> None:  # noqa: ARG002
+    def register_tools(self, mcp) -> None:
         pass
 
 
@@ -72,7 +69,7 @@ class StubMusicProvider:
             if period.contains(e.timestamp):
                 yield e
 
-    def register_tools(self, mcp) -> None:  # noqa: ARG002
+    def register_tools(self, mcp) -> None:
         pass
 
 
@@ -121,7 +118,7 @@ def _scrobble(ts: datetime, artist: str, track: str) -> Event:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def mcp_with_registry() -> tuple[MockMCP, Registry]:
     from echo.tools import query_tools
 
@@ -601,3 +598,312 @@ def test_query_album_note_when_provider_absent(mcp_with_registry) -> None:
     out = mcp.tools["query_album"](album="anything")
     assert out["results"] == []
     assert "unavailable" in out["note"]
+
+
+# ---------------------------------------------------------------------------
+# Trakt (``shows`` provider) query tools
+# ---------------------------------------------------------------------------
+
+
+class StubShowsProvider:
+    """In-memory stand-in for ``ShowsProvider``.
+
+    Takes events + pre-built history / ratings / watchlist lists so each test
+    can pick exactly which path is exercised.
+    """
+
+    name = "shows"
+
+    def __init__(
+        self,
+        events: list[Event] | None = None,
+        history: list | None = None,
+        ratings: list | None = None,
+        watchlist: list | None = None,
+    ) -> None:
+        self._events = events or []
+        self._history = history or []
+        self._ratings = ratings or []
+        self._watchlist = watchlist or []
+
+    def is_available(self) -> bool:
+        return True
+
+    def events(self, period: Period) -> Iterator[Event]:
+        for e in self._events:
+            if period.contains(e.timestamp):
+                yield e
+
+    def history(self) -> list:
+        return list(self._history)
+
+    def ratings(self) -> list:
+        return list(self._ratings)
+
+    def watchlist(self) -> list:
+        return list(self._watchlist)
+
+    def register_tools(self, mcp) -> None:
+        pass
+
+
+def _episode_watch_event(
+    ts: datetime,
+    show: str,
+    season: int,
+    episode: int,
+    *,
+    episode_title: str | None = None,
+    trakt_id: int = 1,
+    show_trakt_id: int = 100,
+    action: str = "watch",
+) -> Event:
+    return Event(
+        timestamp=ts,
+        source="shows",
+        kind="episode_watch",
+        title=f"{show} S{season:02d}E{episode:02d}"
+        + (f" — {episode_title}" if episode_title else ""),
+        payload={
+            "media_type": "episode",
+            "show": show,
+            "show_year": 2008,
+            "season": season,
+            "episode": episode,
+            "episode_title": episode_title,
+            "trakt_id": trakt_id,
+            "imdb_id": None,
+            "show_trakt_id": show_trakt_id,
+            "show_imdb_id": None,
+            "action": action,
+        },
+    )
+
+
+def _movie_watch_event(
+    ts: datetime, title: str, *, trakt_id: int = 500, action: str = "watch"
+) -> Event:
+    return Event(
+        timestamp=ts,
+        source="shows",
+        kind="movie_watch",
+        title=f"{title} (2021)",
+        payload={
+            "media_type": "movie",
+            "title": title,
+            "year": 2021,
+            "trakt_id": trakt_id,
+            "imdb_id": None,
+            "action": action,
+        },
+    )
+
+
+def test_query_trakt_history_returns_newest_first(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(events=[
+            _episode_watch_event(datetime(2026, 2, 1, 20), "BB", 1, 1),
+            _episode_watch_event(datetime(2026, 2, 10, 20), "BB", 1, 2),
+            _episode_watch_event(datetime(2026, 2, 5, 20), "BB", 1, 3),
+        ])
+    )
+    out = mcp.tools["query_trakt_history"]()
+    dates = [r["when"] for r in out["results"]]
+    assert dates == sorted(dates, reverse=True)
+    assert len(out["results"]) == 3
+
+
+def test_query_trakt_history_media_type_filter(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(events=[
+            _episode_watch_event(datetime(2026, 2, 1, 20), "BB", 1, 1),
+            _movie_watch_event(datetime(2026, 2, 2, 20), "Dune"),
+        ])
+    )
+    out = mcp.tools["query_trakt_history"](media_type="movie")
+    assert [r["title"] for r in out["results"]] == ["Dune (2021)"]
+
+
+def test_query_trakt_history_show_filter_case_insensitive(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(events=[
+            _episode_watch_event(datetime(2026, 2, 1, 20), "Breaking Bad", 1, 1),
+            _episode_watch_event(datetime(2026, 2, 2, 20), "Twin Peaks", 1, 1),
+        ])
+    )
+    out = mcp.tools["query_trakt_history"](show="breaking bad")
+    assert len(out["results"]) == 1
+    assert out["results"][0]["show"] == "Breaking Bad"
+
+
+def test_query_trakt_history_date_range_inclusive(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(events=[
+            _episode_watch_event(datetime(2026, 1, 31, 23, 59), "BB", 1, 1),
+            _episode_watch_event(datetime(2026, 2, 15, 10), "BB", 1, 2),
+            _episode_watch_event(datetime(2026, 3, 1, 0, 0), "BB", 1, 3),
+        ])
+    )
+    out = mcp.tools["query_trakt_history"](from_date="2026-02-01", to_date="2026-02-28")
+    assert len(out["results"]) == 1
+    assert "2026-02-15" in out["results"][0]["when"]
+
+
+def test_query_trakt_history_caps_at_200(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    events = [
+        _episode_watch_event(
+            datetime(2026, 2, (i % 28) + 1, i % 24), "BB", 1, i + 1, trakt_id=i
+        )
+        for i in range(250)
+    ]
+    reg.register(StubShowsProvider(events=events))
+    out = mcp.tools["query_trakt_history"](limit=500)
+    assert out["limit"] == 200
+    assert len(out["results"]) == 200
+    assert out["truncated"] is True
+
+
+def test_query_trakt_history_rejects_bad_media_type(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(StubShowsProvider())
+    with pytest.raises(ValueError, match="media_type"):
+        mcp.tools["query_trakt_history"](media_type="show")
+
+
+def test_query_trakt_history_note_when_provider_absent(mcp_with_registry) -> None:
+    mcp, _ = mcp_with_registry
+    out = mcp.tools["query_trakt_history"]()
+    assert out["results"] == []
+    assert "unavailable" in out["note"]
+
+
+def test_query_show_requires_non_empty_title(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(StubShowsProvider())
+    with pytest.raises(ValueError, match="title"):
+        mcp.tools["query_show"](title="  ")
+
+
+def test_query_show_aggregates_history_and_rating_and_watchlist(mcp_with_registry) -> None:
+    from tests.conftest import (
+        trakt_episode,
+        trakt_history,
+        trakt_rating,
+        trakt_show,
+        trakt_watchlist,
+    )
+
+    mcp, reg = mcp_with_registry
+    bb = trakt_show("Breaking Bad", year=2008, trakt_id=1388)
+    reg.register(
+        StubShowsProvider(
+            history=[
+                trakt_history(
+                    datetime(2024, 4, 1, 20, tzinfo=UTC),
+                    trakt_episode(bb, 1, 1, trakt_id=101),
+                    history_id=1,
+                ),
+                trakt_history(
+                    datetime(2024, 4, 2, 20, tzinfo=UTC),
+                    trakt_episode(bb, 1, 2, trakt_id=102),
+                    history_id=2,
+                ),
+                trakt_history(
+                    datetime(2024, 4, 3, 20, tzinfo=UTC),
+                    trakt_episode(bb, 1, 1, trakt_id=101),  # rewatch
+                    history_id=3,
+                ),
+            ],
+            ratings=[
+                trakt_rating(bb, 10, rated_at=datetime(2024, 5, 1, tzinfo=UTC)),
+            ],
+            watchlist=[
+                trakt_watchlist(bb, datetime(2024, 1, 1, tzinfo=UTC)),
+            ],
+        )
+    )
+    out = mcp.tools["query_show"](title="breaking bad")
+    assert out["found"] is True
+    assert out["show"]["trakt_id"] == 1388
+    assert out["plays"] == 3
+    assert out["distinct_episodes"] == 2
+    assert out["show_rating"] == 10
+    assert out["on_watchlist"] is True
+    assert out["recent_episodes"][0]["when"].startswith("2024-04-03")
+
+
+def test_query_show_not_found(mcp_with_registry) -> None:
+    mcp, reg = mcp_with_registry
+    reg.register(StubShowsProvider())
+    out = mcp.tools["query_show"](title="missing show")
+    assert out["found"] is False
+
+
+def test_query_trakt_watchlist_media_type_filter(mcp_with_registry) -> None:
+    from tests.conftest import trakt_movie, trakt_show, trakt_watchlist
+
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(
+            watchlist=[
+                trakt_watchlist(
+                    trakt_show("Shogun", 2024, trakt_id=1),
+                    datetime(2024, 3, 1, tzinfo=UTC),
+                ),
+                trakt_watchlist(
+                    trakt_movie("Dune", 2021, trakt_id=2),
+                    datetime(2024, 3, 5, tzinfo=UTC),
+                ),
+            ]
+        )
+    )
+    out = mcp.tools["query_trakt_watchlist"](media_type="show")
+    assert [r["title"] for r in out["results"]] == ["Shogun"]
+
+
+def test_query_trakt_watchlist_newest_first(mcp_with_registry) -> None:
+    from tests.conftest import trakt_show, trakt_watchlist
+
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(
+            watchlist=[
+                trakt_watchlist(
+                    trakt_show(f"S{i}", trakt_id=i),
+                    datetime(2024, 3, i, tzinfo=UTC),
+                    listed_id=i,
+                )
+                for i in range(1, 4)
+            ]
+        )
+    )
+    out = mcp.tools["query_trakt_watchlist"]()
+    titles = [r["title"] for r in out["results"]]
+    assert titles == ["S3", "S2", "S1"]
+
+
+def test_query_trakt_watchlist_added_after_cutoff(mcp_with_registry) -> None:
+    from tests.conftest import trakt_show, trakt_watchlist
+
+    mcp, reg = mcp_with_registry
+    reg.register(
+        StubShowsProvider(
+            watchlist=[
+                trakt_watchlist(
+                    trakt_show("Old", trakt_id=1),
+                    datetime(2024, 2, 1, tzinfo=UTC),
+                ),
+                trakt_watchlist(
+                    trakt_show("New", trakt_id=2),
+                    datetime(2024, 4, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+    )
+    out = mcp.tools["query_trakt_watchlist"](added_after="2024-03-01")
+    assert [r["title"] for r in out["results"]] == ["New"]

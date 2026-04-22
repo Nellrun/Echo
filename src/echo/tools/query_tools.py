@@ -24,6 +24,8 @@ WATCHLIST_LIMIT_MAX = 200
 FILM_SEARCH_LIMIT_MAX = 50
 ARTIST_SEARCH_TOP_TRACKS = 10
 ALBUM_SEARCH_TOP_TRACKS = 10
+TRAKT_HISTORY_LIMIT_MAX = 200
+TRAKT_WATCHLIST_LIMIT_MAX = 200
 
 
 def _day_bounds(from_: str, to: str) -> Period:
@@ -524,6 +526,274 @@ def register(mcp: FastMCP, registry: Registry) -> None:
                     "year": w.film.year,
                     "added": w.date.isoformat(),
                     "uri": w.film.uri,
+                }
+                for w in trimmed
+            ],
+            "truncated": truncated,
+            "total_matching": len(items),
+            "limit": limit,
+        }
+
+    @mcp.tool()
+    def query_trakt_history(
+        from_date: str | None = None,
+        to_date: str | None = None,
+        media_type: str | None = None,
+        show: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Raw Trakt watch history, newest first.
+
+        All filters are optional — if none are set, you get the ``limit``
+        most recent plays across all media types. Use this for questions
+        like "what did I watch last?" or "what was the last episode of X".
+
+        * ``from_date`` / ``to_date`` — ``YYYY-MM-DD`` inclusive day bounds;
+          if only one is given the other is left open.
+        * ``media_type`` — ``"episode"`` or ``"movie"`` to narrow the stream.
+        * ``show`` — case-insensitive exact show title (``"Breaking Bad"``).
+        * ``limit`` — hard cap, max 200.
+        """
+        limit = max(1, min(limit, TRAKT_HISTORY_LIMIT_MAX))
+        shows = registry.get("shows")
+        if shows is None or not shows.is_available():
+            return {"results": [], "truncated": False, "note": "shows provider unavailable"}
+
+        if media_type is not None and media_type not in ("episode", "movie"):
+            raise ValueError("media_type must be 'episode', 'movie', or omitted")
+
+        from datetime import timedelta as _td
+
+        start_dt: datetime | None = (
+            datetime.combine(date.fromisoformat(from_date), datetime.min.time())
+            if from_date
+            else None
+        )
+        end_dt: datetime | None = (
+            datetime.combine(date.fromisoformat(to_date), datetime.min.time()) + _td(days=1)
+            if to_date
+            else None
+        )
+        if start_dt is not None and end_dt is not None and end_dt <= start_dt:
+            raise ValueError(f"`to_date` precedes `from_date`: {from_date}..{to_date}")
+        label = (
+            f"{from_date or ''}..{to_date or ''}"
+            if (from_date or to_date)
+            else "all"
+        )
+        period = Period(start=start_dt, end=end_dt, label=label)
+
+        show_lc = show.lower() if show else None
+
+        events_iter = shows.events(period)
+        # Sort desc by timestamp — history is most-recent-first by user
+        # expectation but the provider iterates insertion order.
+        collected: list[Any] = []
+        for event in events_iter:
+            if event.kind not in ("episode_watch", "movie_watch"):
+                continue
+            payload = event.payload
+            if media_type is not None and payload.get("media_type") != media_type:
+                continue
+            if show_lc is not None and (payload.get("show") or "").lower() != show_lc:
+                continue
+            collected.append(event)
+
+        collected.sort(key=lambda e: e.timestamp, reverse=True)
+        truncated = len(collected) > limit
+        trimmed = collected[:limit]
+
+        return {
+            "results": [
+                {
+                    "when": e.timestamp.isoformat(),
+                    **e.payload,
+                    "title": e.title,
+                }
+                for e in trimmed
+            ],
+            "truncated": truncated,
+            "total_matching": len(collected),
+            "limit": limit,
+        }
+
+    @mcp.tool()
+    def query_show(title: str) -> dict[str, Any]:  # noqa: PLR0912
+        """
+        Look up a single show across Trakt history, ratings, and watchlist.
+
+        ``title`` is a case-insensitive exact match on the show title
+        (movies aren't addressable through this tool — use ``query_film``
+        for those, or ``query_trakt_history`` with ``media_type=movie``).
+
+        Returns:
+
+        * ``show`` — title / year / trakt_id / imdb_id
+        * ``plays`` — total episode plays
+        * ``distinct_episodes`` — unique ``(season, number)`` pairs seen
+        * ``first_watched`` / ``last_watched`` — ISO dates
+        * ``recent_episodes`` — last 10 episodes watched, newest first
+        * ``show_rating`` — overall show-level rating if any
+        * ``episode_ratings`` — per-episode ratings (up to 25)
+        * ``on_watchlist`` — is the show currently queued
+        """
+        q = (title or "").strip().lower()
+        if not q:
+            raise ValueError("`title` must be non-empty")
+
+        shows = registry.get("shows")
+        if shows is None or not shows.is_available():
+            return {"found": False, "note": "shows provider unavailable"}
+
+        # Late import keeps the module importable without hpi-modules installed.
+        from my.trakt.common import Episode, Show
+
+        show_info: dict[str, Any] | None = None
+        plays = 0
+        distinct_eps: set[tuple[int, int]] = set()
+        first_watched: str | None = None
+        last_watched: str | None = None
+        recent: list[dict[str, Any]] = []
+
+        for entry in shows.history():
+            if not isinstance(entry.media_data, Episode):
+                continue
+            ep = entry.media_data
+            if ep.show.title.lower() != q:
+                continue
+            if show_info is None:
+                show_info = {
+                    "title": ep.show.title,
+                    "year": ep.show.year,
+                    "trakt_id": ep.show.ids.trakt_id,
+                    "imdb_id": ep.show.ids.imdb_id,
+                }
+            plays += 1
+            distinct_eps.add((ep.season, ep.episode))
+            ts = entry.watched_at.isoformat()
+            if first_watched is None or ts < first_watched:
+                first_watched = ts
+            if last_watched is None or ts > last_watched:
+                last_watched = ts
+            recent.append(
+                {
+                    "when": ts,
+                    "season": ep.season,
+                    "episode": ep.episode,
+                    "episode_title": ep.title,
+                    "action": entry.action,
+                }
+            )
+
+        show_rating: int | None = None
+        episode_ratings: list[dict[str, Any]] = []
+        for r in shows.ratings():
+            data = r.media_data
+            if isinstance(data, Show) and data.title.lower() == q:
+                show_rating = r.rating
+                if show_info is None:
+                    show_info = {
+                        "title": data.title,
+                        "year": data.year,
+                        "trakt_id": data.ids.trakt_id,
+                        "imdb_id": data.ids.imdb_id,
+                    }
+            elif isinstance(data, Episode) and data.show.title.lower() == q:
+                episode_ratings.append(
+                    {
+                        "season": data.season,
+                        "episode": data.episode,
+                        "episode_title": data.title,
+                        "rating": r.rating,
+                        "rated_at": r.rated_at.isoformat(),
+                    }
+                )
+                if show_info is None:
+                    show_info = {
+                        "title": data.show.title,
+                        "year": data.show.year,
+                        "trakt_id": data.show.ids.trakt_id,
+                        "imdb_id": data.show.ids.imdb_id,
+                    }
+
+        on_watchlist = False
+        for w in shows.watchlist():
+            if w.media_type == "show" and w.media_data.title.lower() == q:
+                on_watchlist = True
+                if show_info is None:
+                    show_info = {
+                        "title": w.media_data.title,
+                        "year": w.media_data.year,
+                        "trakt_id": w.media_data.ids.trakt_id,
+                        "imdb_id": w.media_data.ids.imdb_id,
+                    }
+                break
+
+        if show_info is None:
+            return {"found": False, "show": None}
+
+        recent.sort(key=lambda r: r["when"], reverse=True)
+        episode_ratings.sort(key=lambda r: (r["season"], r["episode"]))
+
+        return {
+            "found": True,
+            "show": show_info,
+            "plays": plays,
+            "distinct_episodes": len(distinct_eps),
+            "first_watched": first_watched,
+            "last_watched": last_watched,
+            "recent_episodes": recent[:10],
+            "show_rating": show_rating,
+            "episode_ratings": episode_ratings[:25],
+            "on_watchlist": on_watchlist,
+        }
+
+    @mcp.tool()
+    def query_trakt_watchlist(
+        media_type: str | None = None,
+        added_after: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Raw Trakt watchlist entries, newest first.
+
+        Unlike ``query_watchlist`` (which covers Letterboxd films), this
+        endpoint returns both shows and films queued on Trakt.
+
+        * ``media_type`` — ``"show"`` or ``"movie"`` to narrow the list.
+        * ``added_after`` — ``YYYY-MM-DD``; trims to items added on or after.
+        * ``limit`` — hard cap, max 200.
+        """
+        limit = max(1, min(limit, TRAKT_WATCHLIST_LIMIT_MAX))
+        shows = registry.get("shows")
+        if shows is None or not shows.is_available():
+            return {"results": [], "truncated": False, "note": "shows provider unavailable"}
+
+        if media_type is not None and media_type not in ("show", "movie"):
+            raise ValueError("media_type must be 'show', 'movie', or omitted")
+
+        cutoff = date.fromisoformat(added_after) if added_after else None
+
+        items = shows.watchlist()
+        if media_type is not None:
+            items = [w for w in items if w.media_type == media_type]
+        if cutoff is not None:
+            items = [w for w in items if w.listed_at.date() >= cutoff]
+
+        items = sorted(items, key=lambda w: w.listed_at, reverse=True)
+        truncated = len(items) > limit
+        trimmed = items[:limit]
+
+        return {
+            "results": [
+                {
+                    "title": w.media_data.title,
+                    "year": w.media_data.year,
+                    "media_type": w.media_type,
+                    "added": w.listed_at.date().isoformat(),
+                    "trakt_id": w.media_data.ids.trakt_id,
+                    "imdb_id": w.media_data.ids.imdb_id,
                 }
                 for w in trimmed
             ],

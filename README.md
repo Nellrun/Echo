@@ -1,8 +1,8 @@
 # Echo
 
 > **Your personal data, answerable by Claude.**
-> An MCP server that turns your Letterboxd, Last.fm and other exports into
-> tools an LLM can call — locally, offline, under your control.
+> An MCP server that turns your Letterboxd, Last.fm, Trakt and other
+> exports into tools an LLM can call — locally, offline, under your control.
 
 Echo is a [Model Context Protocol](https://modelcontextprotocol.io) server
 that sits on top of [karlicoss/HPI](https://github.com/karlicoss/HPI) and
@@ -13,7 +13,7 @@ activity timeline — that fit into a prompt and produce genuinely good
 answers.
 
 **Keywords:** MCP server, Claude Desktop, personal data, quantified self,
-Letterboxd, Last.fm, lifelogging, HPI, Human Programming Interface,
+Letterboxd, Last.fm, Trakt, lifelogging, HPI, Human Programming Interface,
 self-hosted AI, LLM tools.
 
 ---
@@ -115,6 +115,18 @@ everything keeps working.
 > *Director-level preferences and Letterboxd-average comparisons aren't
 > in the export. Add a scraper/TMDB provider if you want them.*
 
+### Shows — powered by `my.trakt`
+
+| Tool                                    | Returns                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `shows.watched_summary(period)`         | total plays, episodes / movies played, distinct shows & episodes, top shows, most-watched movies, daily distribution |
+| `shows.taste_profile()`                 | most-watched shows, most-rewatched movies, favourite release decades, rating distribution       |
+| `shows.watchlist_overview()`            | total queued, show vs movie split, release-decade mix, 10 most recent, 5 longest-pending         |
+
+> *Trakt covers both TV and films. `shows.*` uses Trakt's combined
+> history; `films.*` stays on Letterboxd diary entries. They're
+> complementary, not redundant.*
+
 ### Music — powered by `my.lastfm`
 
 | Tool                                    | Returns                                                                                           |
@@ -142,6 +154,9 @@ everything keeps working.
 | `query.film_search(query, limit?)`                             | "have I seen this?" — fuzzy substring lookup across diary, ratings, and watchlist    | 50       |
 | `query.artist(name, top_tracks?)`                              | "have I listened to this artist?" — substring over scrobbles with play stats         | —        |
 | `query.album(album, artist?, top_tracks?)`                     | "have I listened to this album?" — substring on album, optional exact-artist filter  | —        |
+| `query.trakt_history(from?, to?, media_type?, show?, limit?)`  | raw Trakt watch history, newest first — filter by date window, episode vs movie, or exact show | 200 |
+| `query.show(title)`                                            | one show + all episodes watched + show / episode ratings + watchlist flag            | 1 show   |
+| `query.trakt_watchlist(media_type?, added_after?, limit?)`     | raw Trakt watchlist (shows + movies), newest first                                   | 200      |
 
 ---
 
@@ -202,6 +217,10 @@ class letterboxd:
 class lastfm:
     # See https://github.com/karlicoss/HPI/blob/master/doc/MODULES.org#mylastfm
     export_path = '~/data/lastfm/scrobbles.json'
+
+class trakt:
+    # Trakt snapshots produced by hpi-harvester (one JSON per pull).
+    export_path = '~/data/trakt/*.json'
 ```
 
 Verify the data pipeline before touching Claude:
@@ -209,6 +228,7 @@ Verify the data pipeline before touching Claude:
 ```bash
 hpi doctor my.letterboxd
 hpi doctor my.lastfm
+hpi doctor my.trakt.all
 ```
 
 ### 4. Plug into Claude Desktop
@@ -226,8 +246,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 }
 ```
 
-Restart Claude Desktop. You should see the `films.*`, `music.*`, `cross.*`
-and `query.*` tools appear in the tool picker. Ask it something.
+Restart Claude Desktop. You should see the `films.*`, `music.*`,
+`shows.*`, `cross.*` and `query.*` tools appear in the tool picker.
+Ask it something.
 
 ### 5. (Optional) Debug with mcp-inspector
 
@@ -285,22 +306,22 @@ tools pick it up automatically.
 
 ## Status
 
-Alpha. Two providers shipping (Letterboxd, Last.fm), 83 tests green,
-FastMCP bootstrap in place. Things that will probably change:
+Alpha. Three providers shipping (Letterboxd, Last.fm, Trakt), 162 tests
+green, FastMCP bootstrap in place. Things that will probably change:
 
 - Tool naming convention (underscore vs dot) once MCP clients settle.
 - Shape of `taste_profile` responses as real conversations reveal gaps.
 - A proper `hpi doctor`-style `echo doctor` command for debugging.
 
-Roadmap: Trakt (TV), GitHub (commits/PRs), Spotify (wrapped-style yearly
-views), a `timeline_summarise` tool that condenses a long window into a
-few sentences.
+Roadmap: GitHub (commits/PRs), Spotify (wrapped-style yearly views),
+a `timeline_summarise` tool that condenses a long window into a few
+sentences.
 
 ## Development
 
 ```bash
 pip install -e ".[tests,dev]"
-pytest                       # 83 tests, runs in <0.1s
+pytest                       # 162 tests, runs in <0.2s
 ruff check src tests
 mypy src
 ```

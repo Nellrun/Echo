@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from tests.conftest import FakeWatchlistItem, film
-
 from echo.providers.films import watchlist as _watchlist
+from tests.conftest import FakeWatchlistItem, film
 
 
 def wli(name: str, year: int | None, added: date) -> FakeWatchlistItem:

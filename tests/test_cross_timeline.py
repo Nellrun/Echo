@@ -22,7 +22,7 @@ class Fixed:
             if period.contains(e.timestamp):
                 yield e
 
-    def register_tools(self, mcp) -> None:  # noqa: ARG002
+    def register_tools(self, mcp) -> None:
         pass
 
 

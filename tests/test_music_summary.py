@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from echo.core.periods import parse_period
 from echo.providers.music import summary
@@ -66,7 +66,7 @@ def test_does_not_expose_listening_hours() -> None:
 
 
 def test_tz_aware_timestamps_are_accepted() -> None:
-    scrobs = [s(datetime(2026, 2, 1, 10, tzinfo=timezone.utc), "A", "x")]
+    scrobs = [s(datetime(2026, 2, 1, 10, tzinfo=UTC), "A", "x")]
     result = summary.build(scrobs, period=parse_period("2026-02"))
     assert "2026-02-01" in result["daily_distribution"]
 

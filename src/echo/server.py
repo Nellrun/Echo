@@ -17,6 +17,7 @@ import os
 from echo.core.registry import default_registry
 from echo.providers.films import FilmsProvider
 from echo.providers.music import MusicProvider
+from echo.providers.shows import ShowsProvider
 from echo.tools import cross_tools, query_tools
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def _configure_logging() -> None:
     )
 
 
-def build_server() -> "FastMCP":  # noqa: F821 — typing-only forward ref
+def build_server() -> FastMCP:  # noqa: F821 — typing-only forward ref
     """
     Build a fully-wired FastMCP instance.
 
@@ -45,7 +46,7 @@ def build_server() -> "FastMCP":  # noqa: F821 — typing-only forward ref
     # Providers. ``is_available`` gates whether the provider's domain
     # tools are registered — tools for an unconfigured source would only
     # surface confusing errors when called.
-    for provider in (FilmsProvider(), MusicProvider()):
+    for provider in (FilmsProvider(), MusicProvider(), ShowsProvider()):
         try:
             available = provider.is_available()
         except Exception:

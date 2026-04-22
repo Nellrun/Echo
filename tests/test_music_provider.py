@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from echo.providers.music import _normalise
 
@@ -29,7 +29,7 @@ class LegacyScrobble:
 
 
 def test_normalise_maps_dt_to_when() -> None:
-    ts = datetime(2026, 2, 1, 12, tzinfo=timezone.utc)
+    ts = datetime(2026, 2, 1, 12, tzinfo=UTC)
     out = _normalise(HPIScrobble(dt=ts, artist="A", name="song"))
     assert out.when == ts
     assert out.track == "song"

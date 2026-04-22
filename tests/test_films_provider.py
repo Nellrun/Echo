@@ -17,7 +17,7 @@ class _StubLetterboxd:
         self.watchlist: list[FakeWatchlistItem] = []
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub_letterboxd(monkeypatch: pytest.MonkeyPatch) -> _StubLetterboxd:
     """Inject a fake ``my.letterboxd.all`` so the provider can be driven in-process."""
     stub = _StubLetterboxd()

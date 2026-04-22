@@ -24,7 +24,7 @@ class _FakeProvider:
             if period.contains(e.timestamp):
                 yield e
 
-    def register_tools(self, mcp) -> None:  # noqa: ARG002
+    def register_tools(self, mcp) -> None:
         pass
 
 
@@ -54,10 +54,10 @@ def test_available_survives_raising_provider() -> None:
         def is_available(self) -> bool:
             raise RuntimeError("boom")
 
-        def events(self, period):  # noqa: ARG002
+        def events(self, period):
             yield from []
 
-        def register_tools(self, mcp):  # noqa: ARG002
+        def register_tools(self, mcp):
             pass
 
     r = Registry()
@@ -105,11 +105,11 @@ def test_iter_events_skips_failing_provider() -> None:
         def is_available(self) -> bool:
             return True
 
-        def events(self, period):  # noqa: ARG002
+        def events(self, period):
             raise RuntimeError("boom")
             yield  # pragma: no cover
 
-        def register_tools(self, mcp):  # noqa: ARG002
+        def register_tools(self, mcp):
             pass
 
     period = parse_period("all")
