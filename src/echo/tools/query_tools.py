@@ -26,6 +26,7 @@ ARTIST_SEARCH_TOP_TRACKS = 10
 ALBUM_SEARCH_TOP_TRACKS = 10
 TRAKT_HISTORY_LIMIT_MAX = 200
 TRAKT_WATCHLIST_LIMIT_MAX = 200
+GAMING_SESSIONS_LIMIT_MAX = 200
 
 
 def _day_bounds(from_: str, to: str) -> Period:
@@ -747,6 +748,167 @@ def register(mcp: FastMCP, registry: Registry) -> None:
             "show_rating": show_rating,
             "episode_ratings": episode_ratings[:25],
             "on_watchlist": on_watchlist,
+        }
+
+    @mcp.tool()
+    def query_game(title: str) -> dict[str, Any]:
+        """
+        Look up a single PlayStation game across ps-timetracker sessions
+        and the library snapshot.
+
+        ``title`` is a case-insensitive substring match — if the user
+        writes ``"elden"`` we still match ``"ELDEN RING"``. If several
+        titles match, each appears as its own entry.
+
+        Per matching game returns:
+
+        * ``game`` / ``platform`` / ``game_id``
+        * ``total_sessions`` / ``total_hours`` (summed across all observed
+          sessions)
+        * ``first_played`` / ``last_played`` (ISO timestamps)
+        * ``in_library`` — is the game listed in the library snapshot,
+          plus its ``library_hours`` / ``library_sessions`` aggregate if so
+
+        Use this before recommending a game to check whether the user
+        already owns / has played it.
+        """
+        q = (title or "").strip().lower()
+        if not q:
+            raise ValueError("`title` must be a non-empty substring")
+
+        gaming = registry.get("gaming")
+        if gaming is None or not gaming.is_available():
+            return {"results": [], "note": "gaming provider unavailable"}
+
+        all_period = Period(start=None, end=None, label="all")
+
+        # Group by canonical (case-sensitive) game title — the library and
+        # the session stream use the same titles for the same game_id.
+        grouped: dict[str, dict[str, Any]] = {}
+
+        def _ensure(name: str, platform: str, game_id: str | None) -> dict[str, Any]:
+            row = grouped.get(name)
+            if row is None:
+                row = {
+                    "game": name,
+                    "platform": platform,
+                    "game_id": game_id,
+                    "total_sessions": 0,
+                    "total_hours": 0.0,
+                    "first_played": None,
+                    "last_played": None,
+                    "in_library": False,
+                    "library_hours": None,
+                    "library_sessions": None,
+                }
+                grouped[name] = row
+            return row
+
+        for event in gaming.events(all_period):
+            if event.kind != "play":
+                continue
+            p = event.payload
+            name = p.get("game") or ""
+            if not name or q not in name.lower():
+                continue
+            row = _ensure(name, p.get("platform") or "", p.get("game_id"))
+            row["total_sessions"] += 1
+            row["total_hours"] += p.get("duration_hours") or 0.0
+            ts = event.timestamp.isoformat()
+            if row["first_played"] is None or ts < row["first_played"]:
+                row["first_played"] = ts
+            if row["last_played"] is None or ts > row["last_played"]:
+                row["last_played"] = ts
+
+        # Merge in library-level aggregates (they can cover games the
+        # session stream missed — older entries with no observed sessions).
+        # Pull the raw snapshot rather than ``library_overview`` because
+        # we need to scan every game, not the bounded top-10 slice.
+        from my.ps_timetracker.all import library as _library_fn
+
+        snapshot = _library_fn()
+        for lg in snapshot.games:
+            name = lg.title or ""
+            if not name or q not in name.lower():
+                continue
+            row = _ensure(name, lg.platform or "", lg.game_id)
+            row["in_library"] = True
+            row["library_sessions"] = lg.sessions_count
+            row["library_hours"] = (
+                round(lg.total_duration.total_seconds() / 3600, 2)
+                if lg.total_duration is not None
+                else None
+            )
+
+        results = sorted(
+            grouped.values(), key=lambda r: r["total_hours"], reverse=True
+        )
+        for r in results:
+            r["total_hours"] = round(r["total_hours"], 2)
+        return {"results": results, "total_matching": len(results)}
+
+    @mcp.tool()
+    def query_gaming_sessions(
+        from_date: str,
+        to_date: str,
+        game: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Raw PlayStation sessions in ``[from_date, to_date]`` (inclusive),
+        newest first.
+
+        Optional filters:
+
+        * ``game`` — case-insensitive substring match on the game title;
+        * ``platform`` — case-insensitive exact match (``"PS5"``, ``"PS4"``,
+          ``"PS3"``, ``"PSVITA"``).
+
+        Each result carries when the session started, duration (hours and
+        seconds), platform, and ps-timetracker ids. Hard cap: 200.
+        """
+        limit = max(1, min(limit, GAMING_SESSIONS_LIMIT_MAX))
+        period = _day_bounds(from_date, to_date)
+        gaming = registry.get("gaming")
+        if gaming is None or not gaming.is_available():
+            return {"results": [], "truncated": False, "note": "gaming provider unavailable"}
+
+        game_lc = game.lower() if game else None
+        platform_lc = platform.lower() if platform else None
+
+        collected: list[Any] = []
+        for event in gaming.events(period):
+            if event.kind != "play":
+                continue
+            payload = event.payload
+            if game_lc and game_lc not in (payload.get("game") or "").lower():
+                continue
+            if platform_lc and (payload.get("platform") or "").lower() != platform_lc:
+                continue
+            collected.append(event)
+
+        collected.sort(key=lambda e: e.timestamp, reverse=True)
+        truncated = len(collected) > limit
+        trimmed = collected[:limit]
+
+        return {
+            "results": [
+                {
+                    "when": e.timestamp.isoformat(),
+                    "game": e.payload.get("game"),
+                    "platform": e.payload.get("platform"),
+                    "duration_hours": e.payload.get("duration_hours"),
+                    "duration_seconds": e.payload.get("duration_seconds"),
+                    "end": e.payload.get("end"),
+                    "game_id": e.payload.get("game_id"),
+                    "playtime_id": e.payload.get("playtime_id"),
+                }
+                for e in trimmed
+            ],
+            "truncated": truncated,
+            "total_matching": len(collected),
+            "limit": limit,
         }
 
     @mcp.tool()

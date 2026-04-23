@@ -1,8 +1,9 @@
 # Echo
 
 > **Your personal data, answerable by Claude.**
-> An MCP server that turns your Letterboxd, Last.fm, Trakt and other
-> exports into tools an LLM can call — locally, offline, under your control.
+> An MCP server that turns your Letterboxd, Last.fm, Trakt, ps-timetracker
+> and other exports into tools an LLM can call — locally, offline, under
+> your control.
 
 Echo is a [Model Context Protocol](https://modelcontextprotocol.io) server
 that sits on top of [karlicoss/HPI](https://github.com/karlicoss/HPI) and
@@ -137,6 +138,21 @@ everything keeps working.
 > *No `listening_hours` field — Last.fm scrobbles don't carry duration;
 > any estimate would be fabricated.*
 
+### Gaming — powered by `my.ps_timetracker`
+
+| Tool                                    | Returns                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `gaming.play_summary(period)`           | total sessions, total hours, unique games, top games by hours, platform mix, daily distribution   |
+| `gaming.taste_profile()`                | top games long-term vs last 30 days (by hours), **core** set (stable) and **flings** set (new-only) |
+| `gaming.library_overview()`             | library snapshot: total games, total hours, platform mix, top 10 by hours, 10 most-recently-played |
+
+> *ps-timetracker is friend-presence based — sessions are wall-clock
+> durations observed from outside, so they can be shorter than true play
+> time if presence pings were missed. Ranking is by hours, not session
+> count: a single long evening with one game outweighs many quick hops.
+> No "watchlist" analogue here — the source only exposes games already
+> seen, not queued titles.*
+
 ### Cross-domain
 
 | Tool                                       | Returns                                                                        |
@@ -157,6 +173,8 @@ everything keeps working.
 | `query.trakt_history(from?, to?, media_type?, show?, limit?)`  | raw Trakt watch history, newest first — filter by date window, episode vs movie, or exact show | 200 |
 | `query.show(title)`                                            | one show + all episodes watched + show / episode ratings + watchlist flag            | 1 show   |
 | `query.trakt_watchlist(media_type?, added_after?, limit?)`     | raw Trakt watchlist (shows + movies), newest first                                   | 200      |
+| `query.gaming_sessions(from_date, to_date, game?, platform?, limit?)` | raw ps-timetracker sessions in a date window                                  | 200      |
+| `query.game(title)`                                            | one game — session totals across history plus library snapshot stats                 | —        |
 
 ---
 
@@ -221,6 +239,10 @@ class lastfm:
 class trakt:
     # Trakt snapshots produced by hpi-harvester (one JSON per pull).
     export_path = '~/data/trakt/*.json'
+
+class ps_timetracker:
+    # ps-timetracker snapshots produced by hpi-harvester.
+    export_path = '~/data/ps_timetracker/*'
 ```
 
 Verify the data pipeline before touching Claude:
@@ -229,6 +251,7 @@ Verify the data pipeline before touching Claude:
 hpi doctor my.letterboxd
 hpi doctor my.lastfm
 hpi doctor my.trakt.all
+hpi doctor my.ps_timetracker.all
 ```
 
 ### 4. Plug into Claude Desktop
@@ -247,8 +270,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 ```
 
 Restart Claude Desktop. You should see the `films.*`, `music.*`,
-`shows.*`, `cross.*` and `query.*` tools appear in the tool picker.
-Ask it something.
+`shows.*`, `gaming.*`, `cross.*` and `query.*` tools appear in the tool
+picker. Ask it something.
 
 ### 5. (Optional) Debug with mcp-inspector
 
@@ -306,8 +329,9 @@ tools pick it up automatically.
 
 ## Status
 
-Alpha. Three providers shipping (Letterboxd, Last.fm, Trakt), 162 tests
-green, FastMCP bootstrap in place. Things that will probably change:
+Alpha. Four providers shipping (Letterboxd, Last.fm, Trakt,
+ps-timetracker), 191 tests green, FastMCP bootstrap in place. Things
+that will probably change:
 
 - Tool naming convention (underscore vs dot) once MCP clients settle.
 - Shape of `taste_profile` responses as real conversations reveal gaps.
@@ -321,7 +345,7 @@ sentences.
 
 ```bash
 pip install -e ".[tests,dev]"
-pytest                       # 162 tests, runs in <0.2s
+pytest                       # 191 tests, runs in <0.2s
 ruff check src tests
 mypy src
 ```
