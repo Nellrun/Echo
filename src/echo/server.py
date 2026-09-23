@@ -18,6 +18,7 @@ from echo.core.registry import default_registry
 from echo.providers.films import FilmsProvider
 from echo.providers.gaming import GamingProvider
 from echo.providers.music import MusicProvider
+from echo.providers.playtime import PlaytimeProvider
 from echo.providers.shows import ShowsProvider
 from echo.tools import cross_tools, query_tools
 
@@ -47,7 +48,13 @@ def build_server() -> FastMCP:  # noqa: F821 — typing-only forward ref
     # Providers. ``is_available`` gates whether the provider's domain
     # tools are registered — tools for an unconfigured source would only
     # surface confusing errors when called.
-    for provider in (FilmsProvider(), MusicProvider(), ShowsProvider(), GamingProvider()):
+    for provider in (
+        FilmsProvider(),
+        MusicProvider(),
+        ShowsProvider(),
+        GamingProvider(),
+        PlaytimeProvider(),
+    ):
         try:
             available = provider.is_available()
         except Exception:

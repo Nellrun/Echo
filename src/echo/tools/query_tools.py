@@ -27,6 +27,8 @@ ALBUM_SEARCH_TOP_TRACKS = 10
 TRAKT_HISTORY_LIMIT_MAX = 200
 TRAKT_WATCHLIST_LIMIT_MAX = 200
 GAMING_SESSIONS_LIMIT_MAX = 200
+PLAYTIME_SESSIONS_LIMIT_MAX = 200
+TROPHIES_LIMIT_MAX = 200
 
 
 def _day_bounds(from_: str, to: str) -> Period:
@@ -903,6 +905,162 @@ def register(mcp: FastMCP, registry: Registry) -> None:
                     "end": e.payload.get("end"),
                     "game_id": e.payload.get("game_id"),
                     "playtime_id": e.payload.get("playtime_id"),
+                }
+                for e in trimmed
+            ],
+            "truncated": truncated,
+            "total_matching": len(collected),
+            "limit": limit,
+        }
+
+    @mcp.tool()
+    def query_playtime_sessions(
+        from_date: str,
+        to_date: str,
+        game: str | None = None,
+        platform: str | None = None,
+        source: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Raw cross-platform play sessions in ``[from_date, to_date]``
+        (inclusive), newest first. Spans PSN, Steam and Nintendo via the
+        gwm-stats aggregator — for PSN-only ps-timetracker rows use
+        ``query_gaming_sessions`` instead.
+
+        Optional filters:
+
+        * ``game`` — case-insensitive substring match on the game title;
+        * ``platform`` — case-insensitive exact match (``"PS5"``,
+          ``"Steam"``, ``"Nintendo"``, ...);
+        * ``source`` — case-insensitive exact backend (``"psn"``,
+          ``"steam"``, ``"nintendo"``).
+
+        Each result carries when the session started, duration (hours and
+        seconds), platform, source, end time and title id. Hard cap: 200.
+        """
+        limit = max(1, min(limit, PLAYTIME_SESSIONS_LIMIT_MAX))
+        period = _day_bounds(from_date, to_date)
+        playtime = registry.get("playtime")
+        if playtime is None or not playtime.is_available():
+            return {"results": [], "truncated": False, "note": "playtime provider unavailable"}
+
+        game_lc = game.lower() if game else None
+        platform_lc = platform.lower() if platform else None
+        source_lc = source.lower() if source else None
+
+        collected: list[Any] = []
+        for event in playtime.events(period):
+            if event.kind != "play":
+                continue
+            payload = event.payload
+            if game_lc and game_lc not in (payload.get("game") or "").lower():
+                continue
+            if platform_lc and (payload.get("platform") or "").lower() != platform_lc:
+                continue
+            if source_lc and (payload.get("source") or "").lower() != source_lc:
+                continue
+            collected.append(event)
+
+        collected.sort(key=lambda e: e.timestamp, reverse=True)
+        truncated = len(collected) > limit
+        trimmed = collected[:limit]
+
+        return {
+            "results": [
+                {
+                    "when": e.timestamp.isoformat(),
+                    "game": e.payload.get("game"),
+                    "platform": e.payload.get("platform"),
+                    "source": e.payload.get("source"),
+                    "duration_hours": e.payload.get("duration_hours"),
+                    "duration_seconds": e.payload.get("duration_seconds"),
+                    "end": e.payload.get("end"),
+                    "title_id": e.payload.get("title_id"),
+                }
+                for e in trimmed
+            ],
+            "truncated": truncated,
+            "total_matching": len(collected),
+            "limit": limit,
+        }
+
+    @mcp.tool()
+    def query_trophies(
+        from_date: str | None = None,
+        to_date: str | None = None,
+        game: str | None = None,
+        source: str | None = None,
+        trophy_type: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Raw trophies/achievements earned, newest first.
+
+        All filters are optional — with none set you get the ``limit`` most
+        recently earned trophies across every game. Only trophies with a
+        known earned-at timestamp are returned.
+
+        * ``from_date`` / ``to_date`` — ``YYYY-MM-DD`` inclusive day bounds;
+          if only one is given the other is left open.
+        * ``game`` — case-insensitive substring match on the game title.
+        * ``source`` — case-insensitive exact backend (``"psn"``, ...).
+        * ``trophy_type`` — ``"platinum"``, ``"gold"``, ``"silver"``,
+          ``"bronze"`` (case-insensitive).
+        * ``limit`` — hard cap, max 200.
+        """
+        limit = max(1, min(limit, TROPHIES_LIMIT_MAX))
+        playtime = registry.get("playtime")
+        if playtime is None or not playtime.is_available():
+            return {"results": [], "truncated": False, "note": "playtime provider unavailable"}
+
+        from datetime import timedelta as _td
+
+        start_dt: datetime | None = (
+            datetime.combine(date.fromisoformat(from_date), datetime.min.time())
+            if from_date
+            else None
+        )
+        end_dt: datetime | None = (
+            datetime.combine(date.fromisoformat(to_date), datetime.min.time()) + _td(days=1)
+            if to_date
+            else None
+        )
+        if start_dt is not None and end_dt is not None and end_dt <= start_dt:
+            raise ValueError(f"`to_date` precedes `from_date`: {from_date}..{to_date}")
+        label = f"{from_date or ''}..{to_date or ''}" if (from_date or to_date) else "all"
+        period = Period(start=start_dt, end=end_dt, label=label)
+
+        game_lc = game.lower() if game else None
+        source_lc = source.lower() if source else None
+        type_lc = trophy_type.lower() if trophy_type else None
+
+        collected: list[Any] = []
+        for event in playtime.events(period):
+            if event.kind != "trophy":
+                continue
+            payload = event.payload
+            if game_lc and game_lc not in (payload.get("game") or "").lower():
+                continue
+            if source_lc and (payload.get("source") or "").lower() != source_lc:
+                continue
+            if type_lc and (payload.get("type") or "").lower() != type_lc:
+                continue
+            collected.append(event)
+
+        collected.sort(key=lambda e: e.timestamp, reverse=True)
+        truncated = len(collected) > limit
+        trimmed = collected[:limit]
+
+        return {
+            "results": [
+                {
+                    "when": e.timestamp.isoformat(),
+                    "game": e.payload.get("game"),
+                    "trophy": e.payload.get("trophy"),
+                    "type": e.payload.get("type"),
+                    "rarity": e.payload.get("rarity"),
+                    "source": e.payload.get("source"),
                 }
                 for e in trimmed
             ],

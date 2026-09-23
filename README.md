@@ -1,9 +1,9 @@
 # Echo
 
 > **Your personal data, answerable by Claude.**
-> An MCP server that turns your Letterboxd, Last.fm, Trakt, ps-timetracker
-> and other exports into tools an LLM can call — locally, offline, under
-> your control.
+> An MCP server that turns your Letterboxd, Last.fm, Trakt, ps-timetracker,
+> gwm-stats and other exports into tools an LLM can call — locally, offline,
+> under your control.
 
 Echo is a [Model Context Protocol](https://modelcontextprotocol.io) server
 that sits on top of [karlicoss/HPI](https://github.com/karlicoss/HPI) and
@@ -153,6 +153,22 @@ everything keeps working.
 > No "watchlist" analogue here — the source only exposes games already
 > seen, not queued titles.*
 
+### Playtime — powered by `my.gwm_stats`
+
+| Tool                                    | Returns                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `playtime.summary(period)`              | cross-platform total hours, top games by hours, split by platform **and** source, daily distribution |
+| `playtime.taste_profile()`              | top games long-term vs last 30 days (by hours), **core** set (stable) and **flings** set (new-only) |
+| `playtime.overview()`                   | aggregator's own all-time totals: hours/sessions/games, avg & longest session, first/last played, trophies earned, top 10 games, per-source breakdown |
+| `playtime.trophy_summary(period)`       | trophies earned: counts by type (platinum/gold/silver/bronze) and source, top games, rarest, most recent |
+
+> *gwm-stats is a cross-platform aggregator spanning PSN, Steam and
+> Nintendo, and is the only source with **trophies/achievements**. It
+> overlaps with `gaming.*` on PSN hours but is kept separate to avoid
+> double-counting — `gaming.*` stays PSN-only (ps-timetracker), `playtime.*`
+> is the cross-platform + trophy view. Timestamps are UTC (vs
+> ps-timetracker's local time).*
+
 ### Cross-domain
 
 | Tool                                       | Returns                                                                        |
@@ -175,6 +191,8 @@ everything keeps working.
 | `query.trakt_watchlist(media_type?, added_after?, limit?)`     | raw Trakt watchlist (shows + movies), newest first                                   | 200      |
 | `query.gaming_sessions(from_date, to_date, game?, platform?, limit?)` | raw ps-timetracker sessions in a date window                                  | 200      |
 | `query.game(title)`                                            | one game — session totals across history plus library snapshot stats                 | —        |
+| `query.playtime_sessions(from_date, to_date, game?, platform?, source?, limit?)` | raw cross-platform (gwm-stats) sessions in a date window           | 200      |
+| `query.trophies(from?, to?, game?, source?, trophy_type?, limit?)` | raw trophies earned, newest first — filter by window, game, source, or type     | 200      |
 
 ---
 
@@ -243,7 +261,15 @@ class trakt:
 class ps_timetracker:
     # ps-timetracker snapshots produced by hpi-harvester.
     export_path = '~/data/ps_timetracker/*'
+
+class gwm_stats:
+    # gwm-stats /api/player snapshots produced by hpi-harvester (one JSON per pull).
+    export_path = '~/data/gwm_stats/*.json'
 ```
+
+> *Most users instead point `my.config.harvester.root` at the harvester
+> data dir once and every module resolves its own source — see hpi-modules.
+> The per-module `export_path` above is the classic karlicoss fallback.*
 
 Verify the data pipeline before touching Claude:
 
@@ -252,6 +278,7 @@ hpi doctor my.letterboxd
 hpi doctor my.lastfm
 hpi doctor my.trakt.all
 hpi doctor my.ps_timetracker.all
+hpi doctor my.gwm_stats.all
 ```
 
 ### 4. Plug into Claude Desktop
@@ -329,9 +356,9 @@ tools pick it up automatically.
 
 ## Status
 
-Alpha. Four providers shipping (Letterboxd, Last.fm, Trakt,
-ps-timetracker), 191 tests green, FastMCP bootstrap in place. Things
-that will probably change:
+Alpha. Five providers shipping (Letterboxd, Last.fm, Trakt,
+ps-timetracker, gwm-stats), 212 tests green, FastMCP bootstrap in place.
+Things that will probably change:
 
 - Tool naming convention (underscore vs dot) once MCP clients settle.
 - Shape of `taste_profile` responses as real conversations reveal gaps.
